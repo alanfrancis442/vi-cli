@@ -12,6 +12,8 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 import questionary
 
+from src.vue.boiler_playes import app_vue_code, three_canvas_code
+
 app = typer.Typer(help="🚀 Modern CLI Project Scaffolder")
 console = Console()
 
@@ -181,6 +183,69 @@ def install_dependencies(project_dir: Path) -> bool:
                         except Exception as e:
                             console.print(f"[yellow]Warning:[/yellow] Could not patch {vite_config}: {e}")
 
+            # Patch nuxt.config.ts or nuxt.config.js for Nuxt
+            is_nuxt = False
+            pkg_json = project_dir / "package.json"
+            if pkg_json.exists():
+                try:
+                    import json
+                    pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
+                    deps = pkg.get("dependencies", {})
+                    dev_deps = pkg.get("devDependencies", {})
+                    if "nuxt" in deps or "nuxt" in dev_deps:
+                        is_nuxt = True
+                except Exception:
+                    pass
+            if is_nuxt:
+                import re
+                for nuxt_name in ["nuxt.config.ts", "nuxt.config.js"]:
+                    nuxt_config = project_dir / nuxt_name
+                    if nuxt_config.exists():
+                        try:
+                            content = nuxt_config.read_text(encoding="utf-8")
+                            # 1. Add import tailwindcss from "@tailwindcss/vite" if not present
+                            if 'import tailwindcss from "@tailwindcss/vite"' not in content:
+                                # Insert after last import
+                                lines = content.splitlines()
+                                last_import = 0
+                                for i, line in enumerate(lines):
+                                    if line.strip().startswith("import"):
+                                        last_import = i + 1
+                                lines.insert(last_import, 'import tailwindcss from "@tailwindcss/vite"')
+                                content = "\n".join(lines)
+                            # 2. Add css: ["~/assets/css/main.css"] to config if not present
+                            if 'css:' not in content:
+                                # Try to insert after defineNuxtConfig({
+                                content = re.sub(r'(defineNuxtConfig\s*\(\s*{)', r"\1\n  css: ['~/assets/css/main.css'],", content)
+                            elif '"~/assets/css/main.css"' not in content and "'~/assets/css/main.css'" not in content:
+                                # Add to existing css array
+                                content = re.sub(r'css:\s*\[([^\]]*)\]', r"css: [\1, '~/assets/css/main.css']", content)
+                            # 3. Add tailwindcss() to vite.plugins if not present
+                            def add_tailwind_plugin(match):
+                                plugins = match.group(1)
+                                if 'tailwindcss()' in plugins:
+                                    return match.group(0)
+                                plugins_new = plugins.replace('[', '[\n      tailwindcss(),', 1)
+                                return f"plugins: {plugins_new}"
+                            content, _ = re.subn(r'plugins:\s*(\[[^\]]*\])', add_tailwind_plugin, content, flags=re.DOTALL)
+                            # If vite/plugins not present, add vite: { plugins: [tailwindcss()] } to config
+                            if 'vite:' not in content:
+                                content = re.sub(r'(defineNuxtConfig\s*\(\s*{)', r"\1\n  vite: { plugins: [tailwindcss()] },", content)
+                            nuxt_config.write_text(content, encoding="utf-8")
+                        except Exception as e:
+                            console.print(f"[yellow]Warning:[/yellow] Could not patch {nuxt_config}: {e}")
+                # Ensure assets/css/main.css exists and has Tailwind import
+                main_css = project_dir / "assets" / "css" / "main.css"
+                if not main_css.parent.exists():
+                    try:
+                        main_css.parent.mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        console.print(f"[yellow]Warning:[/yellow] Could not create assets/css directory: {e}")
+                try:
+                    main_css.write_text("@import 'tailwindcss';\n", encoding="utf-8")
+                except Exception as e:
+                    console.print(f"[yellow]Warning:[/yellow] Could not write main.css: {e}")
+
 
             # Patch main CSS for Tailwind (Vue)
             if is_vue:
@@ -198,53 +263,7 @@ def install_dependencies(project_dir: Path) -> bool:
                 # Use boilerplate from local 'vue' folder (as string literals) for Vue projects
                 try:
                     # App.vue boilerplate
-                    app_vue_code = (
-                        "<template>\n"
-                        "  <div class=\"min-h-screen flex flex-col items-center justify-center bg-gray-900\">\n"
-                        "    <h1 class=\"text-3xl font-bold text-blue-400 mb-6\">Vue 3 + Tailwind + Three.js</h1>\n"
-                        "    <ThreeCanvas />\n"
-                        "  </div>\n"
-                        "</template>\n\n"
-                        "<script setup>\n"
-                        "import ThreeCanvas from './components/ThreeCanvas.vue'\n"
-                        "</script>\n"
-                    )
-                    # ThreeCanvas.vue boilerplate
-                    three_canvas_code = (
-                        "<template>\n"
-                        "  <div ref=\"container\" class=\"w-full h-[400px] bg-black rounded-lg shadow-lg\"></div>\n"
-                        "</template>\n\n"
-                        "<script setup>\n"
-                        "import { onMounted, ref } from 'vue'\n"
-                        "import * as THREE from 'three'\n\n"
-                        "const container = ref(null)\n\n"
-                        "onMounted(() => {\n"
-                        "  const scene = new THREE.Scene()\n"
-                        "  scene.background = new THREE.Color(0x222222)\n\n"
-                        "  const camera = new THREE.PerspectiveCamera(75, container.value.clientWidth / container.value.clientHeight, 0.1, 1000)\n"
-                        "  camera.position.z = 2\n\n"
-                        "  const renderer = new THREE.WebGLRenderer({ antialias: true })\n"
-                        "  renderer.setSize(container.value.clientWidth, container.value.clientHeight)\n"
-                        "  container.value.appendChild(renderer.domElement)\n\n"
-                        "  // Add a spinning cube\n"
-                        "  const geometry = new THREE.BoxGeometry()\n"
-                        "  const material = new THREE.MeshStandardMaterial({ color: 0x42a5f5 })\n"
-                        "  const cube = new THREE.Mesh(geometry, material)\n"
-                        "  scene.add(cube)\n\n"
-                        "  // Add light\n"
-                        "  const light = new THREE.DirectionalLight(0xffffff, 1)\n"
-                        "  light.position.set(5, 5, 5)\n"
-                        "  scene.add(light)\n\n"
-                        "  function animate() {\n"
-                        "    requestAnimationFrame(animate)\n"
-                        "    cube.rotation.x += 0.01\n"
-                        "    cube.rotation.y += 0.01\n"
-                        "    renderer.render(scene, camera)\n"
-                        "  }\n"
-                        "  animate()\n"
-                        "})\n"
-                        "</script>\n"
-                    )
+                    
                     # Write App.vue
                     app_vue = project_dir / "src" / "App.vue"
                     if app_vue.exists():
