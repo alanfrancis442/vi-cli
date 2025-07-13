@@ -1,7 +1,15 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
 [project]
-name = "vi-cli"
-version = "0.1.0"
-description = "Add your description here"
+name = "viquick"
+version = "0.1.1"
+description = "CLI tool that speeds up development"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,3 +17,6 @@ dependencies = [
     "rich>=14.0.0",
     "typer>=0.16.0",
 ]
+
+[project.scripts]
+viquick = "src.main:app"
