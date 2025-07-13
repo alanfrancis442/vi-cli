@@ -9,9 +9,7 @@ import typer
 from rich.console import Console
 from rich.prompt import Confirm
 from rich.panel import Panel
-from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.text import Text
 import questionary
 
 app = typer.Typer(help="🚀 Modern CLI Project Scaffolder")
@@ -113,8 +111,9 @@ def install_dependencies(project_dir: Path) -> bool:
             # Install additional dependencies
             task = progress.add_task("Installing additional dependencies...", total=None)
 
-            # Detect if this is a Vue project (by vite.config.ts and package.json)
+            # Detect if this is a Vue or React project (by vite.config.ts/js and package.json)
             is_vue = False
+            is_react = False
             pkg_json = project_dir / "package.json"
             if pkg_json.exists():
                 try:
@@ -124,13 +123,19 @@ def install_dependencies(project_dir: Path) -> bool:
                     dev_deps = pkg.get("devDependencies", {})
                     if "vue" in deps or "vue" in dev_deps:
                         is_vue = True
+                    if "react" in deps or "react" in dev_deps:
+                        is_react = True
                 except Exception:
                     pass
 
-            # For Vue, add @tailwindcss/vite
-            vue_extra = ["@tailwindcss/vite"] if is_vue else []
-            cmd = ["npm", "install"] + DEPENDENCIES + vue_extra
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # For Vue/React, add @tailwindcss/vite
+            extra_tailwind = ["@tailwindcss/vite"] if is_vue or is_react else []
+
+            use_shell = sys.platform.startswith("win")
+            env = os.environ.copy()
+            env["FORCE_COLOR"] = "1"
+            cmd = ["npm", "install"] + DEPENDENCIES + extra_tailwind
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=use_shell, env=env)
             if result.returncode != 0:
                 console.print(f"[red]Error installing dependencies:[/red] {result.stderr}")
                 return False
@@ -138,24 +143,46 @@ def install_dependencies(project_dir: Path) -> bool:
             # Install dev dependencies
             progress.update(task, description="Installing dev dependencies...")
             cmd = ["npm", "install", "--save-dev"] + DEV_DEPENDENCIES
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, shell=use_shell, env=env)
             if result.returncode != 0:
                 console.print(f"[yellow]Warning:[/yellow] Could not install dev dependencies: {result.stderr}")
 
-            # Patch vite.config.ts for Vue
-            vite_config = project_dir / "vite.config.ts"
-            if is_vue and vite_config.exists():
-                try:
-                    patched = (
-                        "import { defineConfig } from 'vite'\n"
-                        "import tailwindcss from '@tailwindcss/vite'\n"
-                        "export default defineConfig({\n  plugins: [\n    tailwindcss(),\n  ],\n})\n"
-                    )
-                    vite_config.write_text(patched, encoding="utf-8")
-                except Exception as e:
-                    console.print(f"[yellow]Warning:[/yellow] Could not patch vite.config.ts: {e}")
+            # Patch vite.config.js or vite.config.ts for Vue or React
+            if is_vue or is_react:
+                for vite_name in ["vite.config.ts", "vite.config.js"]:
+                    vite_config = project_dir / vite_name
+                    if vite_config.exists():
+                        try:
+                            content = vite_config.read_text(encoding="utf-8")
+                            # Add import if not present
+                            if "import tailwindcss from '@tailwindcss/vite'" not in content:
+                                # Place after last import
+                                lines = content.splitlines()
+                                last_import = 0
+                                for i, line in enumerate(lines):
+                                    if line.strip().startswith("import"):
+                                        last_import = i + 1
+                                lines.insert(last_import, "import tailwindcss from '@tailwindcss/vite'")
+                                content = "\n".join(lines)
+                            # Add tailwindcss() to plugins array if not present
+                            import re
+                            def add_tailwind_plugin(match):
+                                plugins = match.group(1)
+                                # If tailwindcss() already present, skip
+                                if "tailwindcss()" in plugins:
+                                    return match.group(0)
+                                # Insert tailwindcss() after [
+                                plugins_new = plugins.replace('[', '[\n    tailwindcss(),', 1)
+                                return f"plugins: {plugins_new}"
+                            content_new, n = re.subn(r"plugins:\s*(\[[^\]]*\])", add_tailwind_plugin, content, flags=re.DOTALL)
+                            if n == 0:
+                                content_new = content
+                            vite_config.write_text(content_new, encoding="utf-8")
+                        except Exception as e:
+                            console.print(f"[yellow]Warning:[/yellow] Could not patch {vite_config}: {e}")
 
-            # Patch main CSS for Tailwind
+
+            # Patch main CSS for Tailwind (Vue)
             if is_vue:
                 css_candidates = list(project_dir.glob("src/**/*.*"))
                 for css_file in css_candidates:
@@ -167,6 +194,36 @@ def install_dependencies(project_dir: Path) -> bool:
                                 break
                         except Exception as e:
                             console.print(f"[yellow]Warning:[/yellow] Could not patch {css_file}: {e}")
+
+            # For React: clear App.css, index.css, and replace App.jsx with minimal component
+            if is_react:
+                try:
+                    src_dir = project_dir / "src"
+                    # Clear App.css
+                    app_css = src_dir / "App.css"
+                    if app_css.exists():
+                        app_css.write_text("", encoding="utf-8")
+                    # Clear index.css
+                    index_css = src_dir / "index.css"
+                    if index_css.exists():
+                        index_css.write_text("@import 'tailwindcss';", encoding="utf-8")
+                    # Replace App.jsx with minimal React component
+                    app_jsx = src_dir / "App.jsx"
+                    if app_jsx.exists():
+                        app_jsx.write_text(
+                            "import React from 'react'\n\n"
+                            "function App() {\n"
+                            "  return (\n"
+                            "    <div>\n"
+                            "      <h1>Hello, React + Tailwind!</h1>\n"
+                            "    </div>\n"
+                            "  );\n"
+                            "}\n\n"
+                            "export default App\n",
+                            encoding="utf-8"
+                        )
+                except Exception as e:
+                    console.print(f"[yellow]Warning:[/yellow] Could not clear React boilerplate: {e}")
 
             progress.update(task, description="Additional dependencies installed!", completed=True)
         
